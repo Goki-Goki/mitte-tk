@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(page_title="Mitte Padel – Open Matches", layout="wide")
 
@@ -55,40 +55,57 @@ def add_to_waitlist(row, email):
 # -------------------
 # Streamlit UI
 # -------------------
-st.title("🎾 Mitte Padel – Offene Matches in Hamburg")
-st.write("Finde offene Matches in den Mitte-Clubs und trage dich bei Bedarf in die Warteliste ein.")
+st.title("🎾 Mitte Padel – Offene Matches")
+st.write("Finde offene Matches in den Mitte-Clubs in Hamburg und trage dich bei Bedarf in die Warteliste ein.")
 
 matches = load_matches()
 if matches.empty:
     st.warning("Keine Matches gefunden.")
     st.stop()
 
-# Filter-Optionen
-st.sidebar.header("Filter")
+# -------------------
+# Sidebar: Filter
+# -------------------
+st.sidebar.header("🔍 Filteroptionen")
+
 today = datetime.now().date()
-selected_date = st.sidebar.date_input("Datum auswählen", value=today, min_value=today)
+selected_date = st.sidebar.date_input("Datum", value=today, min_value=today)
 selected_time = st.sidebar.time_input("Frühester Startzeitpunkt", value=datetime.now().time())
 
+# Dynamische Filterwerte
+clubs = sorted(matches["club_name"].dropna().unique().tolist())
+levels = sorted(matches["level"].dropna().unique().tolist())
+
+selected_club = st.sidebar.multiselect("Club auswählen", clubs, default=clubs)
+selected_level = st.sidebar.multiselect("Spielniveau auswählen", levels, default=levels)
+
+# -------------------
 # Filter anwenden
+# -------------------
 filtered = matches[
     (matches["start_time"].dt.date == selected_date) &
-    (matches["start_time"].dt.time >= selected_time)
+    (matches["start_time"].dt.time >= selected_time) &
+    (matches["club_name"].isin(selected_club)) &
+    (matches["level"].isin(selected_level))
 ]
 
+# -------------------
+# Ergebnisse anzeigen
+# -------------------
 if filtered.empty:
     st.info("Keine offenen Matches für diese Auswahl.")
 else:
-    st.subheader(f"Gefundene Matches am {selected_date}")
+    st.subheader(f"Gefundene Matches am {selected_date} ({len(filtered)})")
     for idx, row in filtered.iterrows():
         with st.container():
             st.markdown(
-                f"**{row['club_name']} – {row['court_name']}**  "
-                f"⏰ {row['start_time'].strftime('%H:%M')} – {row['end_time'].strftime('%H:%M')}  "
-                f"🏷️ Level: {row['level']}  "
+                f"### {row['club_name']} – {row['court_name']}\n"
+                f"⏰ {row['start_time'].strftime('%H:%M')} – {row['end_time'].strftime('%H:%M')}  \n"
+                f"🏷️ Level: {row['level']}  \n"
                 f"👥 Freie Plätze: {row['free_slots']}"
             )
 
-            with st.expander("Auf Warteliste setzen"):
+            with st.expander("➡️ Auf Warteliste setzen"):
                 email = st.text_input(f"Deine E-Mail für Match {idx}", key=f"email_{idx}")
                 if st.button(f"Jetzt eintragen ({row['club_name']} {row['start_time'].strftime('%H:%M')})", key=f"btn_{idx}"):
                     if email:
@@ -97,4 +114,4 @@ else:
                     else:
                         st.error("Bitte E-Mail eingeben, um dich einzutragen.")
 
-    st.caption("⚡ Datenquelle: Google Sheet (OpenMatches Demo)")
+st.caption("⚡ Datenquelle: Google Sheet (OpenMatches Demo)")
