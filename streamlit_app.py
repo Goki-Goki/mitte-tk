@@ -1,117 +1,161 @@
-import streamlit as st
-import pandas as pd
 import os
-from datetime import datetime
+import urllib.parse
+from datetime import datetime, timedelta, time
+
+import pandas as pd
+import streamlit as st
 
 st.set_page_config(page_title="Mitte Padel – Open Matches", layout="wide")
 
-# -------------------
+# -------------------------------------------------------------------
 # Konfiguration
-# -------------------
-OPENMATCHES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRjtjgQ1kAlaeche7r78gtPzUkN3KZofTIkD47FWFaqIVHAR51Ehv72bgTguiHYu6PUe5sCsHrEF3XN/pub?output=csv"
-WAITLIST_FILE = "waitlist.csv"
+# -------------------------------------------------------------------
+# Öffentliche CSV-URL deines Google Sheets (Tab mit OpenMatches)
+OPENMATCHES_CSV_URL = (
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vRjtjgQ1kAlaeche7r78gtPzUkN3KZofTIkD47FWFaqIVHAR51Ehv72bgTguiHYu6PUe5sCsHrEF3XN/pub?output=csv"
+)
 
-# -------------------
-# Daten laden
-# -------------------
+# -------------------------------------------------------------------
+# Hilfsfunktionen
+# -------------------------------------------------------------------
 @st.cache_data(ttl=300)
-def load_matches():
+def load_matches() -> pd.DataFrame:
+    """Lädt die Matchdaten aus dem veröffentlichten Google-Sheet (CSV)."""
     try:
         df = pd.read_csv(OPENMATCHES_CSV_URL)
     except Exception as e:
         st.error(f"Fehler beim Laden der Match-Daten: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(columns=[
+            "city", "club_name", "court_name",
+            "start_time", "end_time", "level", "free_slots", "match_url"
+        ])
+
+    # Spalten-Normalisierung (robust gegenüber leicht abweichenden Headern)
+    colmap = {c.lower().strip(): c for c in df.columns}
+    def has(col): return col in colmap
+
+    # Erwartete Kernspalten
+    expected = ["city", "club_name", "court_name", "start_time", "end_time", "level", "free_slots"]
+    for c in expected:
+        if not has(c):
+            df[c] = None
+        else:
+            # Auf Standardnamen mappen (lowercase-Key -> echter Spaltenname)
+            df.rename(columns={colmap[c]: c}, inplace=True)
+
+    # optionale URL-Spalten
+    if has("match_url") and colmap["match_url"] != "match_url":
+        df.rename(columns={colmap["match_url"]: "match_url"}, inplace=True)
+    elif "match_url" not in df.columns:
+        df["match_url"] = None
+
+    if has("booking_url") and colmap["booking_url"] != "booking_url":
+        df.rename(columns={colmap["booking_url"]: "booking_url"}, inplace=True)
+    elif "booking_url" not in df.columns:
+        df["booking_url"] = None
 
     # Datumsfelder parsen
-    if "start_time" in df.columns:
-        df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
-    if "end_time" in df.columns:
-        df["end_time"] = pd.to_datetime(df["end_time"], errors="coerce")
+    for col in ("start_time", "end_time"):
+        df[col] = pd.to_datetime(df[col], errors="coerce")
+
+    # Level als String vereinheitlichen (keine NaNs)
+    df["level"] = df["level"].fillna("").astype(str)
+
+    # Freie Plätze als Zahl / robust gegen leere Werte
+    try:
+        df["free_slots"] = pd.to_numeric(df["free_slots"], errors="coerce").fillna(0).astype(int)
+    except Exception:
+        df["free_slots"] = 0
+
+    # city/club/court Strings
+    for c in ("city", "club_name", "court_name"):
+        df[c] = df[c].fillna("").astype(str)
 
     return df
 
-# -------------------
-# Warteliste speichern
-# -------------------
-def add_to_waitlist(row, email):
-    new_entry = {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "city": row.get("city", ""),
-        "club_name": row.get("club_name", ""),
-        "court_name": row.get("court_name", ""),
-        "start_time": row.get("start_time", ""),
-        "end_time": row.get("end_time", ""),
-        "level": row.get("level", ""),
-        "free_slots": row.get("free_slots", ""),
-        "email": email
-    }
-    if os.path.exists(WAITLIST_FILE):
-        df = pd.read_csv(WAITLIST_FILE)
-        df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
-    else:
-        df = pd.DataFrame([new_entry])
-    df.to_csv(WAITLIST_FILE, index=False)
 
-# -------------------
-# Streamlit UI
-# -------------------
-st.title("🎾 Mitte Padel – Offene Matches")
-st.write("Finde offene Matches in den Mitte-Clubs in Hamburg und trage dich bei Bedarf in die Warteliste ein.")
+def build_signup_url(row: pd.Series) -> str:
+    """
+    Priorität:
+    1) match_url
+    2) booking_url
+    3) Fallback: Playtomic-Suche mit Club + Stadt
+    """
+    for key in ("match_url", "booking_url"):
+        val = row.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+
+    # Fallback: Suche
+    query = f"{row.get('club_name','')} {row.get('city','Hamburg')}".strip()
+    q = urllib.parse.quote_plus(query)
+    # Allgemeine Suchseite (Playtomic kann den genauen Pfad variieren)
+    return f"https://playtomic.com/search?query={q}"
+
+
+def human_time(t: datetime) -> str:
+    return t.strftime("%H:%M") if isinstance(t, (datetime,)) else ""
+
+
+# -------------------------------------------------------------------
+# UI – Header
+# -------------------------------------------------------------------
+st.title("🎾 Mitte Padel – Offene Matches in Hamburg")
+st.write("Finde offene Matches in den Mitte-Clubs in Hamburg und melde dich direkt bei Playtomic an.")
 
 matches = load_matches()
-if matches.empty:
-    st.warning("Keine Matches gefunden.")
+if matches.empty or matches["start_time"].isna().all():
+    st.warning("Keine verwertbaren Matches gefunden (leere Daten oder ungültige Zeitstempel).")
     st.stop()
 
-# -------------------
+# -------------------------------------------------------------------
 # Sidebar: Filter
-# -------------------
+# -------------------------------------------------------------------
 st.sidebar.header("🔍 Filteroptionen")
 
 today = datetime.now().date()
 selected_date = st.sidebar.date_input("Datum", value=today, min_value=today)
-selected_time = st.sidebar.time_input("Frühester Startzeitpunkt", value=datetime.now().time())
 
-# Dynamische Filterwerte
-clubs = sorted(matches["club_name"].dropna().unique().tolist())
-levels = sorted(matches["level"].dropna().unique().tolist())
+# Zeit-Slider (08:00–22:00) mit 30-Minuten-Schritten
+time_range = st.sidebar.slider(
+    "Spielzeit auswählen (von/bis)",
+    value=(time(hour=16, minute=0), time(hour=22, minute=0)),
+    min_value=time(hour=8, minute=0),
+    max_value=time(hour=22, minute=0),
+    step=timedelta(minutes=30)
+)
 
+# dynamische Filterwerte
+clubs = sorted([c for c in matches["club_name"].dropna().unique().tolist() if c])
+levels = sorted([l for l in matches["level"].dropna().unique().tolist() if l])
+
+# Default: alle vorselektiert
 selected_club = st.sidebar.multiselect("Club auswählen", clubs, default=clubs)
 selected_level = st.sidebar.multiselect("Spielniveau auswählen", levels, default=levels)
 
-# -------------------
+# -------------------------------------------------------------------
 # Filter anwenden
-# -------------------
-filtered = matches[
-    (matches["start_time"].dt.date == selected_date) &
-    (matches["start_time"].dt.time >= selected_time) &
-    (matches["club_name"].isin(selected_club)) &
-    (matches["level"].isin(selected_level))
+# -------------------------------------------------------------------
+# Sicherheitskopie (kein SettingWithCopy)
+df = matches.copy()
+
+# Datum/Zeit filtern
+df = df[
+    (df["start_time"].dt.date == selected_date) &
+    (df["start_time"].dt.time >= time_range[0]) &
+    (df["end_time"].dt.time <= time_range[1])
 ]
 
-# -------------------
-# Ergebnisse anzeigen
-# -------------------
-if filtered.empty:
-    st.info("Keine offenen Matches für diese Auswahl.")
-else:
-    st.subheader(f"Gefundene Matches am {selected_date} ({len(filtered)})")
-    for idx, row in filtered.iterrows():
-        with st.container():
-            st.markdown(
-                f"### {row['club_name']} – {row['court_name']}\n"
-                f"⏰ {row['start_time'].strftime('%H:%M')} – {row['end_time'].strftime('%H:%M')}  \n"
-                f"🏷️ Level: {row['level']}  \n"
-                f"👥 Freie Plätze: {row['free_slots']}"
-            )
+# Club / Level filtern (nur wenn Liste nicht leer)
+if selected_club:
+    df = df[df["club_name"].isin(selected_club)]
+if selected_level:
+    df = df[df["level"].isin(selected_level)]
 
-            with st.expander("➡️ Auf Warteliste setzen"):
-                email = st.text_input(f"Deine E-Mail für Match {idx}", key=f"email_{idx}")
-                if st.button(f"Jetzt eintragen ({row['club_name']} {row['start_time'].strftime('%H:%M')})", key=f"btn_{idx}"):
-                    if email:
-                        add_to_waitlist(row, email)
-                        st.success("Du wurdest erfolgreich auf die Warteliste gesetzt! ✅")
-                    else:
-                        st.error("Bitte E-Mail eingeben, um dich einzutragen.")
+df = df.sort_values(by=["start_time", "club_name", "court_name"])
 
-st.caption("⚡ Datenquelle: Google Sheet (OpenMatches Demo)")
+# -------------------------------------------------------------------
+# Ergebnisse
+# -------------------------------------------------------------------
+if df.empty:
+    st.info("K
