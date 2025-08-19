@@ -1,155 +1,100 @@
-"""
-streamlit_app.py
-================
-
-This Streamlit application presents available Padel match slots scraped from
-Playtomic and allows users to register their interest for a particular slot.
-
-The app reads data from a CSV file (``open_matches.csv``) which is expected to
-contain records in the format defined by :class:`playtomic_scraper.OpenSlot`.
-The user can filter the table by city and (optionally) level.  After selecting
-a desired slot, the user can enter their email address and click **Join
-Waitlist**; this will append their details to a second CSV file
-(``waitlist.csv``).  In a production deployment you would instead push this
-data into a database or CRM, but for the purpose of a quick prototype we use
-simple files.
-
-To run the app locally::
-
-    streamlit run streamlit_app.py
-
-To deploy on Streamlit Cloud, push this file along with ``open_matches.csv``
-and ``waitlist.csv`` (which can be empty) to your Git repository and link
-the repository in the Streamlit Cloud dashboard.
-"""
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import os
+from datetime import datetime, timedelta
 
+st.set_page_config(page_title="Mitte Padel – Open Matches", layout="wide")
 
+# -------------------
+# Konfiguration
+# -------------------
+OPENMATCHES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRjtjgQ1kAlaeche7r78gtPzUkN3KZofTIkD47FWFaqIVHAR51Ehv72bgTguiHYu6PUe5sCsHrEF3XN/pub?output=csv"
+WAITLIST_FILE = "waitlist.csv"
+
+# -------------------
+# Daten laden
+# -------------------
 @st.cache_data(ttl=300)
 def load_matches():
-    # CSV-URL aus Google Sheets „Veröffentlichen im Web“ (Tab OpenMatches)
-    SHEET_CSV_URL = st.secrets.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vRjtjgQ1kAlaeche7r78gtPzUkN3KZofTIkD47FWFaqIVHAR51Ehv72bgTguiHYu6PUe5sCsHrEF3XN/pub?output=csv", "")
-    if not SHEET_CSV_URL:
-        st.error("OPENMATCHES_CSV_URL fehlt in st.secrets")
-        return pd.DataFrame(columns=[
-            "city","club_name","court_name","start_time","end_time","level","free_slots"
-        ])
-    df = pd.read_csv(SHEET_CSV_URL)
+    try:
+        df = pd.read_csv(OPENMATCHES_CSV_URL)
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Match-Daten: {e}")
+        return pd.DataFrame()
+
     # Datumsfelder parsen
-    for col in ("start_time","end_time"):
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
+    if "start_time" in df.columns:
+        df["start_time"] = pd.to_datetime(df["start_time"], errors="coerce")
+    if "end_time" in df.columns:
+        df["end_time"] = pd.to_datetime(df["end_time"], errors="coerce")
+
     return df
 
+# -------------------
+# Warteliste speichern
+# -------------------
+def add_to_waitlist(row, email):
+    new_entry = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "city": row.get("city", ""),
+        "club_name": row.get("club_name", ""),
+        "court_name": row.get("court_name", ""),
+        "start_time": row.get("start_time", ""),
+        "end_time": row.get("end_time", ""),
+        "level": row.get("level", ""),
+        "free_slots": row.get("free_slots", ""),
+        "email": email
+    }
+    if os.path.exists(WAITLIST_FILE):
+        df = pd.read_csv(WAITLIST_FILE)
+        df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
+    else:
+        df = pd.DataFrame([new_entry])
+    df.to_csv(WAITLIST_FILE, index=False)
 
-def append_waitlist_entry(match_row: pd.Series, email: str) -> None:
-    """Appends a waitlist entry to the CSV file.
+# -------------------
+# Streamlit UI
+# -------------------
+st.title("🎾 Mitte Padel – Offene Matches in Hamburg")
+st.write("Finde offene Matches in den Mitte-Clubs und trage dich bei Bedarf in die Warteliste ein.")
 
-    Args:
-        match_row: A pandas Series representing the selected row.
-        email: The user's email address.
-    """
-    entry = match_row.to_dict()
-    entry["email"] = email
-    # Append to the waitlist file.  Create the file with header if it
-    # doesn't exist yet.
-    try:
-        waitlist_df = pd.read_csv(WAITLIST_FILE)
-    except FileNotFoundError:
-        waitlist_df = pd.DataFrame(columns=list(entry.keys()))
-    waitlist_df = pd.concat([waitlist_df, pd.DataFrame([entry])], ignore_index=True)
-    waitlist_df.to_csv(WAITLIST_FILE, index=False)
+matches = load_matches()
+if matches.empty:
+    st.warning("Keine Matches gefunden.")
+    st.stop()
 
+# Filter-Optionen
+st.sidebar.header("Filter")
+today = datetime.now().date()
+selected_date = st.sidebar.date_input("Datum auswählen", value=today, min_value=today)
+selected_time = st.sidebar.time_input("Frühester Startzeitpunkt", value=datetime.now().time())
 
-def main():
-    st.set_page_config(page_title="Padel Matches", layout="centered")
-    st.title("🎾 Open Padel Matches")
+# Filter anwenden
+filtered = matches[
+    (matches["start_time"].dt.date == selected_date) &
+    (matches["start_time"].dt.time >= selected_time)
+]
 
-    df = load_matches()
-    if df.empty:
-        return
+if filtered.empty:
+    st.info("Keine offenen Matches für diese Auswahl.")
+else:
+    st.subheader(f"Gefundene Matches am {selected_date}")
+    for idx, row in filtered.iterrows():
+        with st.container():
+            st.markdown(
+                f"**{row['club_name']} – {row['court_name']}**  "
+                f"⏰ {row['start_time'].strftime('%H:%M')} – {row['end_time'].strftime('%H:%M')}  "
+                f"🏷️ Level: {row['level']}  "
+                f"👥 Freie Plätze: {row['free_slots']}"
+            )
 
-    # Convert time strings to datetime for filtering
-    # If the CSV uses ISO 8601 strings (YYYY-MM-DD HH:MM), pandas can parse them directly.
-    for col in ["start_time", "end_time"]:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    # Create helper columns for filtering
-    df["start_datetime"] = df["start_time"]
-    df["end_datetime"] = df["end_time"]
+            with st.expander("Auf Warteliste setzen"):
+                email = st.text_input(f"Deine E-Mail für Match {idx}", key=f"email_{idx}")
+                if st.button(f"Jetzt eintragen ({row['club_name']} {row['start_time'].strftime('%H:%M')})", key=f"btn_{idx}"):
+                    if email:
+                        add_to_waitlist(row, email)
+                        st.success("Du wurdest erfolgreich auf die Warteliste gesetzt! ✅")
+                    else:
+                        st.error("Bitte E-Mail eingeben, um dich einzutragen.")
 
-    # Sidebar filters
-    st.sidebar.header("Filter")
-    # City filter
-    city_options = df["city"].dropna().unique().tolist()
-    selected_city = st.sidebar.selectbox("City", options=city_options)
-    # Level filter
-    level_options = ["All"]
-    if "level" in df.columns:
-        unique_levels = df["level"].dropna().unique().tolist()
-        if unique_levels:
-            level_options += unique_levels
-    selected_level = st.sidebar.selectbox("Level", options=level_options)
-    # Date filter: desired date
-    import datetime as dt
-    selected_date = st.sidebar.date_input("Desired date", value=dt.date.today())
-    # Time range filter
-    start_time_input = st.sidebar.time_input("Start after", value=dt.time(0, 0))
-    end_time_input = st.sidebar.time_input("End before", value=dt.time(23, 59))
-    # Construct datetime range for comparison
-    start_dt = dt.datetime.combine(selected_date, start_time_input)
-    end_dt = dt.datetime.combine(selected_date, end_time_input)
-
-    # Apply filters
-    filtered_df = df[df["city"] == selected_city].copy()
-    if selected_level != "All" and "level" in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df["level"] == selected_level]
-    # Filter by date/time range
-    filtered_df = filtered_df[
-        (filtered_df["start_datetime"] >= start_dt) & (filtered_df["end_datetime"] <= end_dt)
-    ]
-
-    # Display the filtered table
-    st.subheader(f"Available Matches in {selected_city}")
-    st.write(
-        "Select a match below to join the waitlist.\n"
-        "Use the date and time filters in the sidebar to find matches within your preferred time window."
-    )
-
-    if filtered_df.empty:
-        st.info("No matches available for the selected filters.")
-        return
-
-    # Reset index for display purposes
-    display_df = filtered_df.reset_index(drop=True)
-    st.dataframe(display_df)
-    # Row selection via number input
-    selected_index = st.number_input(
-        "Enter the row number of the match you want to join (starting from 0):",
-        min_value=0,
-        max_value=len(display_df) - 1,
-        step=1,
-        format="%d",
-    )
-
-    with st.form(key="waitlist_form"):
-        st.write("**Join Waitlist**")
-        email = st.text_input("Your email address")
-        submitted = st.form_submit_button("Join Waitlist")
-        if submitted:
-            # Basic validation
-            if "@" not in email:
-                st.error("Please enter a valid email address.")
-            else:
-                match_row = display_df.iloc[int(selected_index)]
-                append_waitlist_entry(match_row, email)
-                st.success(
-                    f"You have been added to the waitlist for {match_row['club_name']} on "
-                    f"{match_row['start_time']} - {match_row['end_time']}!"
-                )
-
-
-if __name__ == "__main__":
-    main()
+    st.caption("⚡ Datenquelle: Google Sheet (OpenMatches Demo)")
