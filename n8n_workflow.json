@@ -1,0 +1,103 @@
+{
+  "name": "Playtomic Open Matches Demo",
+  "active": false,
+  "nodes": [
+    {
+      "id": "cron",
+      "name": "Cron",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "interval": {
+          "minutes": 30
+        }
+      }
+    },
+    {
+      "id": "httpRequest",
+      "name": "Fetch Matches",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "url": "https://playtomic.io/api/v1/tenants",
+        "method": "GET",
+        "queryParameters": [
+          {
+            "name": "user_id",
+            "value": "me"
+          },
+          {
+            "name": "playtomic_status",
+            "value": "ACTIVE"
+          },
+          {
+            "name": "sport_id",
+            "value": "PADEL"
+          },
+          {
+            "name": "radius",
+            "value": "50000"
+          },
+          {
+            "name": "size",
+            "value": "40"
+          }
+        ],
+        "options": {}
+      }
+    },
+    {
+      "id": "function",
+      "name": "Parse Matches",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": {
+        "functionCode": "// This code receives the JSON response from the HTTP Request node\n// and converts it into an array of items with a flat structure.\n// It filters results to only include the two Mitte Padel clubs in Hamburg.\nconst results = [];\nconst data = items[0].json;\n// Define target city and club names\nconst TARGET_CITY = 'Hamburg';\nconst TARGET_CLUBS = ['mitte — The Cabrio', 'mitte — Dolce Vita'];\n// Iterate through clubs\nif (data && Array.isArray(data.tenants)) {\n  for (const club of data.tenants) {\n    const city = club.city || 'Unknown';\n    const clubName = club.name || 'Unknown';\n    // Filter by city and club name\n    if (city === TARGET_CITY && TARGET_CLUBS.includes(clubName)) {\n      if (Array.isArray(club.matches)) {\n        for (const match of club.matches) {\n          results.push({\n            json: {\n              city: city,\n              club_name: clubName,\n              court_name: match.court_name || '',\n              start_time: match.start_time || '',\n              end_time: match.end_time || '',\n              level: match.level || '',\n              free_slots: match.free_slots || ''\n            }\n          });\n        }\n      }\n    }\n  }\n}\nreturn results;"
+      }
+    },
+    {
+      "id": "googleSheets",
+      "name": "Append to Google Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 3,
+      "position": [850, 300],
+      "parameters": {
+        "operation": "append",
+        "sheetId": "YOUR_SHEET_ID",
+        "range": "OpenMatches!A:G",
+        "options": {
+          "valueInputMode": "USER_ENTERED"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron": {
+      "main": [
+        {
+          "node": "Fetch Matches",
+          "type": "main"
+        }
+      ]
+    },
+    "Fetch Matches": {
+      "main": [
+        {
+          "node": "Parse Matches",
+          "type": "main"
+        }
+      ]
+    },
+    "Parse Matches": {
+      "main": [
+        {
+          "node": "Append to Google Sheet",
+          "type": "main"
+        }
+      ]
+    }
+  }
+}
