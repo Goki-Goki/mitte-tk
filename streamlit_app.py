@@ -27,22 +27,20 @@ import pandas as pd
 import streamlit as st
 
 
-DATA_FILE = "open_matches.csv"
-WAITLIST_FILE = "waitlist.csv"
-
-
-def load_matches() -> pd.DataFrame:
-    """Loads match data from the CSV.
-
-    Returns:
-        A pandas DataFrame with at least the columns: city, club_name,
-        court_name, start_time, end_time, level, free_slots.
-    """
-    try:
-        df = pd.read_csv(DATA_FILE)
-    except FileNotFoundError:
-        st.error(f"Data file {DATA_FILE} not found. Please add it to the app directory.")
-        return pd.DataFrame()
+@st.cache_data(ttl=300)
+def load_matches():
+    # CSV-URL aus Google Sheets „Veröffentlichen im Web“ (Tab OpenMatches)
+    SHEET_CSV_URL = st.secrets.get("https://docs.google.com/spreadsheets/d/e/2PACX-1vRjtjgQ1kAlaeche7r78gtPzUkN3KZofTIkD47FWFaqIVHAR51Ehv72bgTguiHYu6PUe5sCsHrEF3XN/pub?output=csv", "")
+    if not SHEET_CSV_URL:
+        st.error("OPENMATCHES_CSV_URL fehlt in st.secrets")
+        return pd.DataFrame(columns=[
+            "city","club_name","court_name","start_time","end_time","level","free_slots"
+        ])
+    df = pd.read_csv(SHEET_CSV_URL)
+    # Datumsfelder parsen
+    for col in ("start_time","end_time"):
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
     return df
 
 
