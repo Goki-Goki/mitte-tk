@@ -158,4 +158,37 @@ df = df.sort_values(by=["start_time", "club_name", "court_name"])
 # Ergebnisse
 # -------------------------------------------------------------------
 if df.empty:
-    st.info("K
+    st.info("Keine offenen Matches für diese Auswahl.")
+else:
+    st.subheader(f"Gefundene Matches am {selected_date}  ·  {len(df)} Einträge")
+
+    # Optional: kompakte Tabellenansicht zum Überblick
+    with st.expander("📋 Tabellarische Ansicht einblenden", expanded=False):
+        tdf = df.copy()
+        # Anzeigeformat für Zeiten
+        tdf["start"] = tdf["start_time"].dt.strftime("%H:%M")
+        tdf["end"] = tdf["end_time"].dt.strftime("%H:%M")
+        tdf = tdf[["city", "club_name", "court_name", "start", "end", "level", "free_slots"]]
+        st.dataframe(tdf, use_container_width=True)
+
+    # Kartenartige Darstellung
+    for idx, row in df.iterrows():
+        with st.container():
+            st.markdown(
+                f"### {row['club_name']} – {row['court_name']}\n"
+                f"⏰ {human_time(row['start_time'])} – {human_time(row['end_time'])}  \n"
+                f"🏷️ Level: {row['level'] or '—'}  \n"
+                f"👥 Freie Plätze: {int(row['free_slots']) if pd.notna(row['free_slots']) else 0}"
+            )
+            signup_url = build_signup_url(row)
+
+            # Bevorzugt: Link-Button (falls deine Streamlit-Version das Feature hat)
+            try:
+                st.link_button("Jetzt anmelden", signup_url, use_container_width=False)
+            except Exception:
+                # Fallback als normaler Link
+                st.markdown(f"[Jetzt anmelden]({signup_url})", unsafe_allow_html=True)
+
+            st.divider()
+
+st.caption("⚡ Datenquelle: Google Sheet (OpenMatches Demo) · „Jetzt anmelden“ leitet zu Playtomic (Match/Club/Suche).")
